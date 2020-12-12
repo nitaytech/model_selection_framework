@@ -1,6 +1,7 @@
-from model_selection_framework import configs as C
-from model_selection_framework import torch_base_model, utils
-from model_selection_framework.torch_layers import init_weights
+import configs as C
+import torch_base_model
+import utils
+from torch_layers import init_weights
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, SubsetRandomSampler

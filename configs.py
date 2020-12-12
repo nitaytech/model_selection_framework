@@ -103,7 +103,7 @@ configs = {
 # ------------- configurations defaults  ------------- #
 
 
-from model_selection_framework.metrics import *
+from metrics import *
 import torch
 
 

@@ -1,5 +1,5 @@
-from model_selection_framework.trainer import fit_trainer, fit_trainer_cv
-import model_selection_framework.utils as U
+from trainer import fit_trainer, fit_trainer_cv
+import utils as U
 from torch.utils.data import DataLoader
 import os
 from itertools import product
