@@ -1,4 +1,4 @@
-from utils import to_iterable, sequence_not_str
+from framework.utils import sequence_not_str
 import torch
 from torch.nn import Sequential, Linear, Dropout
 from torch.nn.init import xavier_uniform_

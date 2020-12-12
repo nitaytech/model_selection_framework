@@ -1,5 +1,5 @@
-from trainer import fit_trainer, fit_trainer_cv
-import utils as U
+from framework.trainer import fit_trainer, fit_trainer_cv
+from framework import utils as U
 from torch.utils.data import DataLoader
 import os
 from itertools import product
