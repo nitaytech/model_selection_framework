@@ -27,6 +27,7 @@ class Trainer(abc.ABC):
         if self._save_results:
             self._results.to_csv(self.results_file, index=False)
         self._current_epoch = 0
+        self._make_last_epoch_results = False
         self._current_datetime = datetime.datetime.now()
         self._basic_results = {'name': self._name, 'model': type(self.model).__name__,
                                'hyperparameters': self._hyperparameters}
@@ -62,9 +63,18 @@ class Trainer(abc.ABC):
 
     @property
     def results_file(self):
-        if not os.path.exists(os.path.join(self.folder, 'results')):
-            os.makedirs(os.path.join(self.folder, 'results'))
-        return os.path.join(self.folder, 'results', self.name + '_results.csv')
+        if self._save_results:
+            if not os.path.exists(os.path.join(self.folder, 'results')):
+                os.makedirs(os.path.join(self.folder, 'results'))
+            return os.path.join(self.folder, 'results', self.name + '_results.csv')
+        else:
+            return None
+
+    @property
+    def model_file(self):
+        if self._save_model and not os.path.exists(os.path.join(self.folder, 'models')):
+            os.makedirs(os.path.join(self.folder, 'models'))
+        return os.path.join(self.folder, 'models', self.name + '_model.pkl')
 
     @property
     def results(self):
@@ -79,14 +89,10 @@ class Trainer(abc.ABC):
         if self._save_results:
             self._results.tail(1).astype(str).to_csv(self.results_file, mode='a', header=False, index=False)
 
-    def save_model(self, file_name=None):
-        if not os.path.exists(os.path.join(self.folder, 'models')):
-            os.makedirs(os.path.join(self.folder, 'models'))
-        if file_name is None:
-            file_name = f'{self.name}_e{self._current_epoch}.pkl'
-        file_path = os.path.join(self.folder, 'models', file_name)
-        with open(file_path, 'wb') as file:
-            pickle.dump(self.model, file)
+    def save_model(self):
+        if self._save_model:
+            with open(self.model_file, 'wb') as file:
+                pickle.dump(self.model, file)
 
     @staticmethod
     def load_model(file_path):
@@ -129,33 +135,38 @@ class Trainer(abc.ABC):
     def _prepare_fit(self):
         self._current_epoch = 0
         self._current_datetime = datetime.datetime.now()
+        self._make_last_epoch_results = True
         self._print(f"# {'-' * 20} Starting Experiment {self.name} {'-' * 20} #", verbose=1)
 
     def _make_results(self, train_data, test_data):
-        current_datetime = datetime.datetime.now()
-        time = (current_datetime - self._current_datetime).total_seconds()
-        self._current_datetime = current_datetime
-        dt = self._current_datetime.strftime('%Y/%m/%d %H:%M:%S')
-        results = self._basic_results.copy()
-        results.update({'datetime': dt, 'epoch': self._current_epoch, 'fit_time': time})
-        _, train_metrics = self.predict(train_data)
-        results.update({f'{k}_train': v for k, v in train_metrics.items()})
-        if test_data is not None:
-            _, test_metrics = self.predict(test_data)
-        else: # same as train
-            test_metrics = train_metrics
-        results.update({f'{k}_test': v for k, v in test_metrics.items()})
-        self._append_results(pd.DataFrame([{k: str(v) if isinstance(v, (dict, list, tuple)) else v
-                                            for k, v in results.items()}]))
-        return results
+        if self._make_last_epoch_results:
+            current_datetime = datetime.datetime.now()
+            time = (current_datetime - self._current_datetime).total_seconds()
+            self._current_datetime = current_datetime
+            dt = self._current_datetime.strftime('%Y/%m/%d %H:%M:%S')
+            results = self._basic_results.copy()
+            results.update({'datetime': dt, 'epoch': self._current_epoch, 'fit_time': time})
+            _, train_metrics = self.predict(train_data)
+            results.update({f'{k}_train': v for k, v in train_metrics.items()})
+            if test_data is not None:
+                _, test_metrics = self.predict(test_data)
+            else: # same as train
+                test_metrics = train_metrics
+            results.update({f'{k}_test': v for k, v in test_metrics.items()})
+            self._append_results(pd.DataFrame([{k: str(v) if isinstance(v, (dict, list, tuple)) else v
+                                                for k, v in results.items()}]))
+            return results
+        else:
+            return self.results.tail(1)
 
     def _best_results(self):
         return self.results.tail(1)
 
     def _end_fit(self):
         best_results = self._best_results()
-        if self._save_model:
-            self.save_model()
+        best_results['results_file_path'] = self.results_file if self._save_results else None
+        best_results['model_file_path'] = self.model_file if self._save_model else None
+        self.save_model()
         self._print(f"Finished to fit, Experiment {self.name} is over. Best test results are:", verbose=1)
         self._print(str(utils.deep_round(best_results.to_dict('records')[0], 3)), verbose=1)
         return best_results
@@ -211,7 +222,7 @@ class SklearnTrainer(Trainer):
     def _fit(self, train_data, test_data):
         X_train, y_train = train_data
         self.model.fit(X_train, y_train)
-        self._current_epoch = 1
+        self._current_epoch += 1
 
 
 class TorchTrainer(Trainer):
@@ -275,20 +286,18 @@ class TorchTrainer(Trainer):
         else:
             return 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    @property
+    def model_file(self):
+        if self._save_model and not os.path.exists(os.path.join(self.folder, 'models')):
+            os.makedirs(os.path.join(self.folder, 'models'))
+        return os.path.join(self.folder, 'models', self.name + '_model.pt')
+
     def to_device(self, x, device=None):
         device = device if device is not None else self.device
         if device == 'cpu':
             return x.cpu()
         else:
             return x.cuda() if torch.cuda.is_available() else x
-
-    def save_model(self, file_name=None):
-        if not os.path.exists(os.path.join(self.folder, 'models')):
-            os.makedirs(os.path.join(self.folder, 'models'))
-        if file_name is None:
-            file_name = f'{self.name}_e{self._current_epoch}.pt'
-        file_path = os.path.join(self.folder, 'models', file_name)
-        torch.save(self.model, file_path)
 
     @staticmethod
     def load_model(file_path):
@@ -329,13 +338,12 @@ class TorchTrainer(Trainer):
             self._print(f"convergence_metric return value is not a number, changing the convergence_metric to loss.",
                         verbose=2)
             self._convergence_metric = 'loss_test'
-        current_test_metric = results[self._convergence_metric] * (-1 if self._convergence_metric == 'loss_test' else 1)
+        current_test_metric = results[self._convergence_metric] * (-1 if 'loss' in self._convergence_metric else 1)
         # if there was an improvement
         if self._best_test_metric <= current_test_metric:
             self._no_improve_iterations = 0
             self._best_test_metric = results[self._convergence_metric]
-            if self._save_model:
-                self.save_model(file_name=f'{self.name}_best_model.pt')
+            self.save_model()
         else:
             self._no_improve_iterations += 1
 
@@ -442,10 +450,13 @@ class TorchTrainer(Trainer):
                     current_samples = 0
             loss = np.mean(np.array(losses))
             self._basic_results.update({'loss': loss, 'grad': grad})
-            if epoch % self._eval_every_x_epochs == 0 and epoch != self._epochs:
+            if epoch % self._eval_every_x_epochs == 0 or epoch == self._epochs:
                 results = self._make_results(train_data, test_data)
                 self._check_for_improvement(results)
                 self._print_results(results)
+                if epoch == self._epochs:
+                    self._make_last_epoch_results = False
+                    self._save_model = False
             if self._no_improve_iterations >= self._convergence_iterations:
                 break
 
