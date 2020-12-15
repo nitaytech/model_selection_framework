@@ -368,10 +368,10 @@ class TorchTrainer(Trainer):
              f" loss: {utils.deep_round(results['loss'], 3)} | grad: {utils.deep_round(results['grad'], 3)} |"
         self._write_to_tensorboard(metric_name="Gradient", train=True, metric_score=results['grad'],
                                    epoch=results['epoch'])
-        for metric in ['loss'] + sorted(self._metrics):
+        for metric in ['loss'] + sorted(self._metrics.keys()):
             io += f" {metric + '_train'}: {utils.deep_round(results[metric + '_train'], 3)} |"
             io += f" {metric + '_test'}: {utils.deep_round(results[metric + '_test'], 3)} |"
-            if metric in ['loss', self._convergence_metric]:
+            if metric == 'loss' or self._convergence_metric.startswith(metric):
                 self._write_to_tensorboard(metric_name=metric, train=True, metric_score=results[metric + '_train'],
                                            epoch=results['epoch'])
                 self._write_to_tensorboard(metric_name=metric, train=False, metric_score=results[metric + '_test'],
@@ -429,7 +429,7 @@ class TorchTrainer(Trainer):
         self.model.train()
         self._launch_tensorboard()
         epochs = tqdm.tqdm(range(1, self._epochs + 1), position=0, leave=True) \
-            if self._verbose >= 4 else range(self._epochs)
+            if self._verbose >= 4 else list(range(self._epochs))
         for epoch in epochs:
             losses = []
             self._current_epoch = epoch
@@ -495,7 +495,7 @@ def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tu
     if isinstance(data, typing.Tuple): # sklearn model case
         n = len(data[0])
     elif isinstance(data, DataLoader): # torch dataloader case
-        n = len(data)
+        n = len(data.dataset)
     else:
         raise ValueError("data should be tuple of (X, y) or torch dataloader.")
     name = f"{configs.get('name', C.name)}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -518,7 +518,8 @@ def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tu
             train_data, test_data = (X_train, y_train), (X_test, y_test)
         else: # data is torch.DataLoader
             # some awful coding practise, but torch DataLoader doesn't support creating a sub data loader.
-            dl_kwargs = {k: v for k, v in data.__dict__.items() if not k.startswith('_') and k not in ['sampler']}
+            dl_kwargs = {k: v for k, v in data.__dict__.items()
+                         if not k.startswith('_') and k not in ['sampler', 'batch_sampler']}
             train_sampler = SubsetRandomSampler(train_indices)
             test_sampler = SubsetRandomSampler(test_indices)
             train_data = torch.utils.data.DataLoader(sampler=train_sampler, **dl_kwargs)

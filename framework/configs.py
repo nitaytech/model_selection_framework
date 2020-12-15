@@ -105,23 +105,23 @@ configs = {
 
 from framework.metrics import *
 import torch
-
+import os
 
 name = 'EXP'
-folder = 'experiments'
-epochs = 15
+folder = os.getcwd()
+epochs = 75
 metrics = {'accuracy': accuracy, 'recall': recall, 'precision': precision,
            'pred_lift': pred_lift, 'roc_auc': roc_auc,
            'best_threshold': best_threshold}
-save_model = True
+save_model = False
 save_results = True
 verbose = 1
 loss_every_x_samples = 1
 eval_every_x_epochs = 1
-convergence_iterations = 10
+convergence_iterations = 25
 convergence_metric = 'roc_auc'
 optimizer = torch.optim.Adam
-optimizer_kwargs = {'lr': 0.0005}
+optimizer_kwargs = {'lr': 0.001}
 criterion = torch.nn.NLLLoss
 criterion_kwargs = {}
-tensorboard_port = 6006
+tensorboard_port = -1
