@@ -90,9 +90,8 @@ class Trainer(abc.ABC):
             self._results.tail(1).astype(str).to_csv(self.results_file, mode='a', header=False, index=False)
 
     def save_model(self):
-        if self._save_model:
-            with open(self.model_file, 'wb') as file:
-                pickle.dump(self.model, file)
+        with open(self.model_file, 'wb') as file:
+            pickle.dump(self.model, file)
 
     @staticmethod
     def load_model(file_path):
@@ -138,7 +137,7 @@ class Trainer(abc.ABC):
         self._make_last_epoch_results = True
         self._print(f"# {'-' * 20} Starting Experiment {self.name} {'-' * 20} #", verbose=1)
 
-    def _make_results(self, train_data, test_data):
+    def _make_results(self, train_data, test_data = None):
         if self._make_last_epoch_results:
             current_datetime = datetime.datetime.now()
             time = (current_datetime - self._current_datetime).total_seconds()
@@ -166,7 +165,8 @@ class Trainer(abc.ABC):
         best_results = self._best_results()
         best_results['results_file_path'] = self.results_file if self._save_results else None
         best_results['model_file_path'] = self.model_file if self._save_model else None
-        self.save_model()
+        if self._save_model and self._make_last_epoch_results:
+            self.save_model()
         self._print(f"Finished to fit, Experiment {self.name} is over. Best test results are:", verbose=1)
         self._print(str(utils.deep_round(best_results.to_dict('records')[0], 3)), verbose=1)
         return best_results
@@ -299,10 +299,6 @@ class TorchTrainer(Trainer):
         else:
             return x.cuda() if torch.cuda.is_available() else x
 
-    @staticmethod
-    def load_model(file_path):
-        return torch.load(file_path)
-
     def calculate_grad(self):
         grad = 0
         for p in self.model.parameters():
@@ -343,7 +339,8 @@ class TorchTrainer(Trainer):
         if self._best_test_metric <= current_test_metric:
             self._no_improve_iterations = 0
             self._best_test_metric = results[self._convergence_metric]
-            self.save_model()
+            if self._save_model:
+                self.save_model()
         else:
             self._no_improve_iterations += 1
 
@@ -429,7 +426,7 @@ class TorchTrainer(Trainer):
         self.model.train()
         self._launch_tensorboard()
         epochs = tqdm.tqdm(range(1, self._epochs + 1), position=0, leave=True) \
-            if self._verbose >= 4 else list(range(self._epochs))
+            if self._verbose >= 4 else list(range(1, self._epochs + 1))
         for epoch in epochs:
             losses = []
             self._current_epoch = epoch
@@ -456,8 +453,8 @@ class TorchTrainer(Trainer):
                 self._print_results(results)
                 if epoch == self._epochs:
                     self._make_last_epoch_results = False
-                    self._save_model = False
             if self._no_improve_iterations >= self._convergence_iterations:
+                self._make_last_epoch_results = False
                 break
 
 
@@ -480,7 +477,7 @@ def create_trainer(model, configs: typing.Dict = None):
 
 
 def fit_trainer(configs: dict, parameters: dict, train_data: typing.Union[typing.Tuple, DataLoader],
-                test_data: typing.Union[typing.Tuple, DataLoader] = None):
+                test_data: typing.Union[typing.Tuple, DataLoader] = None, **kwargs):
     model_init = configs['model_init']
     model = model_init(**parameters)
     if isinstance(model, torch.nn.Module):
@@ -490,23 +487,31 @@ def fit_trainer(configs: dict, parameters: dict, train_data: typing.Union[typing
     return trainer.fit(train_data, test_data)
 
 
-def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tuple, DataLoader],
-                   cv: int = 5, random_state: int = 42):
+def cv_data_split(data: typing.Union[typing.Tuple, DataLoader], cv: typing.Union[int, typing.List] = 5,
+                  random_state: int = 42, **kwargs) -> typing.List[typing.Tuple]:
+
     if isinstance(data, typing.Tuple): # sklearn model case
         n = len(data[0])
     elif isinstance(data, DataLoader): # torch dataloader case
         n = len(data.dataset)
     else:
         raise ValueError("data should be tuple of (X, y) or torch dataloader.")
-    name = f"{configs.get('name', C.name)}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-    verbose = configs.get('verbose', C.verbose)
-    if verbose >= 0.5:
-        print(f"# {'-' * 20} Starting {cv}-Folds CV Experiment {name} {'-' * 20} #")
-    folds_indices = utils.k_folds_indices(n, k=cv, random_state=random_state, shuffle=True)
-    results = []
-    for i , (train_indices, test_indices) in enumerate(folds_indices):
+    if isinstance(cv, int):
+        folds_indices = utils.k_folds_indices(n, k=cv, random_state=random_state, shuffle=True)
+    elif isinstance(cv, (list, tuple)) and isinstance(cv[0], (list, tuple)) and isinstance(cv[0][0], int):
+        all_indices = set(range(n))
+        folds_indices = [(list(indices), list(all_indices - set(indices))) for indices in cv]
+    else:
+        raise ValueError(f"cv should be an int or a list/tuple of indices like [[1, 2, 3, 4], [1, 2, 3, 5]]")
+    folds_data = []
+    for train_indices, test_indices in folds_indices:
         if isinstance(data, typing.Tuple):
-            X, y = data
+            if len(data) == 3:
+                _, X, y = data
+            elif len(data) == 2:
+                X, y = data
+            else:
+                raise ValueError("data should be tuple of (X, y) or torch dataloader.")
             if isinstance(X, (pd.DataFrame, pd.Series)):
                 X_train, X_test = X.iloc[train_indices], X.iloc[test_indices]
             else:
@@ -516,7 +521,7 @@ def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tu
             else:
                 y_train, y_test = y[train_indices], y[test_indices]
             train_data, test_data = (X_train, y_train), (X_test, y_test)
-        else: # data is torch.DataLoader
+        else:  # data is torch.DataLoader
             # some awful coding practise, but torch DataLoader doesn't support creating a sub data loader.
             dl_kwargs = {k: v for k, v in data.__dict__.items()
                          if not k.startswith('_') and k not in ['sampler', 'batch_sampler']}
@@ -524,8 +529,23 @@ def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tu
             test_sampler = SubsetRandomSampler(test_indices)
             train_data = torch.utils.data.DataLoader(sampler=train_sampler, **dl_kwargs)
             test_data = torch.utils.data.DataLoader(sampler=test_sampler, **dl_kwargs)
-        # fold_configs = configs.copy()
-        # fold_configs['name'] = f"{configs.get('name', C.name)}_fold-{i}"
+        folds_data.append((train_data, test_data))
+    return folds_data
+
+
+def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tuple, DataLoader],
+                   cv: typing.Union[int, typing.List] = 5, random_state: int = 42):
+    name = f"{configs.get('name', C.name)}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    verbose = configs.get('verbose', C.verbose)
+    if isinstance(cv, int):
+        cvs = cv
+    else:
+        cvs = len(cv)
+    if verbose >= 0.5:
+        print(f"# {'-' * 20} Starting {cvs}-Folds CV Experiment {name} {'-' * 20} #")
+    results = []
+    folds_data = cv_data_split(data, cv, random_state)
+    for train_data, test_data in folds_data:
         results.append(fit_trainer(configs, parameters, train_data, test_data))
     results = pd.concat(results, axis=0)
     agg_results = results.mode().head(1)
@@ -536,6 +556,6 @@ def fit_trainer_cv(configs: dict, parameters: dict, data: typing.Union[typing.Tu
             agg_results[f'{c}_std'] = results[c].std()
         agg_results[f'{c}_values'] = [results[c].tolist()]
     if verbose >= 0.5:
-        print(f"{cv}-Folds CV Experiment {name} is over. Results are:")
+        print(f"{cvs}-Folds CV Experiment {name} is over. Results are:")
         print(str(utils.deep_round(agg_results.to_dict('records')[0], 3)))
     return agg_results

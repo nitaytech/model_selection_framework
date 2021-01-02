@@ -16,7 +16,7 @@ def fc_layers(input_size: int, hidden_sizes: typing.Union[typing.Sequence[int], 
               output_size: int,
               dropout_p: typing.Union[typing.Sequence[float], float] = None,
               activation_func: typing.Union[typing.Sequence[torch.nn.Module], torch.nn.Module] = None,
-              activation_last_layer: bool = False, bias_last_layer: bool = False) -> Sequential:
+              activation_last_layer: bool = False, bias_last_layer: bool = True) -> Sequential:
     """
     create an sequential fully connected linear layer. You should specify the input and output sizes,
      and the hidden layers sizes.
@@ -189,7 +189,7 @@ class Attention(torch.nn.Module):
 class AggAttention(torch.nn.Module):
     def __init__(self, input_size):
         super(AggAttention, self).__init__()
-        self.context = torch.nn.Parameter(torch.normal(mean=0, std=1, size=(input_size, )), requires_grad=True)
+        self.context = torch.nn.Parameter(torch.normal(mean=0, std=0.1, size=(input_size, )), requires_grad=True)
         self.softmax = torch.nn.Softmax(dim=-1)
 
     def forward(self, query):

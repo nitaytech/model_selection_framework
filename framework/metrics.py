@@ -43,7 +43,7 @@ def best_threshold(y_scores, y_pred, y_true):
     acc_max_id = np.argmax(accuracies)
     adj_max_id = np.argmax(adj_accuracies)
     best_acc_threshold = thresholds[acc_max_id]
-    best_adj_threshold = thresholds[acc_max_id]
+    best_adj_threshold = thresholds[adj_max_id]
     f1s = (2 * precisions * recalls) / np.where(precisions + recalls == 0, 1.0, precisions + recalls)
     f1_max_id = np.argmax(f1s)
     best_f1_threshold = thresholds[f1_max_id]

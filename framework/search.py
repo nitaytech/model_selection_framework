@@ -28,14 +28,25 @@ def prepare_search(configs: dict):
     return configs
 
 
-def end_search(search_results: pd.DataFrame, configs: dict, return_best: bool = True, metric: str = None):
+def end_search(search_results: pd.DataFrame, configs: dict, return_best: typing.Union[bool, int] = True,
+               metric: str = None):
     output_path = configs.get('output_path', None)
     verbose = configs.get('verbose', 0)
     search_results.to_csv(output_path, index=False)
     if verbose >= 0.5:
         print("Hyperparameters Search has ended",
               f"results are saved to: {output_path}" if output_path is not None else "")
-    if not return_best:
+    if isinstance(return_best, bool):
+        if return_best:
+            return_best = 1
+        else:
+            return_best = None
+    elif isinstance(return_best, int):
+        if return_best > search_results.shape[0]:
+            return_best = search_results.shape[0]
+    else:
+        return_best = None
+    if return_best is None:
         return search_results
     else:
         if metric is None:
@@ -43,15 +54,44 @@ def end_search(search_results: pd.DataFrame, configs: dict, return_best: bool = 
         metric = metric + '_test'
         if metric not in search_results:
             raise ValueError(f"metric {metric} is missing from search_results")
-        best_hyperparameters = search_results.sort_values(by=metric, ascending=False)['hyperparameters'].values[0]
-        if isinstance(best_hyperparameters, str):
-            best_hyperparameters = eval(best_hyperparameters)
-        return best_hyperparameters
+        search_results = search_results.sort_values(by=metric, ascending=False)
+        best_results = search_results.head(return_best).copy()
+        best_results['cv_fold'] = 'mean'
+        best_results['rank'] = list(range(best_results.shape[0]))
+        # case of cv, keeping the top of each cv
+        if metric + '_values' in search_results.columns:
+            cvs = len(search_results['name_values'].values[0])
+            for i in range(cvs):
+                search_results = search_results.sort_values(by=metric + '_values', ascending=False,
+                                                            key=lambda values: values.apply(lambda x: x[i]))
+                fold_best_results = search_results.head(return_best).copy()
+                fold_best_results['cv_fold'] = str(i)
+                fold_best_results['rank'] = list(range(fold_best_results.shape[0]))
+                best_results = pd.concat([best_results, fold_best_results], axis=0)
+        # delete all models and results files not included in top_results
+        for i, row in search_results.iterrows():
+            if i not in best_results.index:
+                model_path = row['model_file_path']
+                if os.path.exists(model_path):
+                    os.remove(model_path)
+                results_path = row['results_file_path']
+                if os.path.exists(results_path):
+                    os.remove(results_path)
+                if 'model_file_path_values' in row:
+                    for model_path in row['model_file_path_values']:
+                        if os.path.exists(model_path):
+                            os.remove(model_path)
+                if 'results_file_path_values' in row:
+                    for results_path in row['results_file_path_values']:
+                        if os.path.exists(results_path):
+                            os.remove(results_path)
+        return best_results
 
 
 def base_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
                 test_data: typing.Union[typing.Tuple, DataLoader] = None, search_type: str = 'grid',
-                max_iter: int = None, cv: int = 1, random_state: int = 42):
+                max_iter: int = None, cv: typing.Union[int, typing.List] = 1,
+                random_state: int = 42):
     """
     :param configs: experiment configs. Must contain 'model_init' which is the model init function.
      The 'init_parameters' value in configs is the init arguments of the model and should be a Dict[str, List],
@@ -60,7 +100,8 @@ def base_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader
     :param test_data:
     :param search_type: should be 'grid' or 'random'
     :param max_iter: number of search iterations
-    :param cv: number of cross-validation fold, default is 1. Any non int value is considered as 1.
+    :param cv: number of cross-validation folds, or a list of folds indices. default is 1.
+     Any non int value is considered as 1.
      When cv > 1, test_data won't be used.
     :param random_state: random seed for cv splits.
     :return: search results pd.DataFrame
@@ -83,7 +124,8 @@ def base_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader
         else:
             raise ValueError(f"search_type should be 'random' or 'grid, got {search_type}")
     for i, parameters in enumerate(parameters):
-        if isinstance(cv, int) and cv > 1:
+        if (isinstance(cv, int) and cv > 1) or (isinstance(cv, (list, tuple)) and isinstance(cv[0], (list, tuple)) and
+                                                isinstance(cv[0][0], int)):
             results = fit_trainer_cv(configs, parameters, train_data, cv, random_state)
         else:
             results = fit_trainer(configs, parameters, train_data, test_data)
@@ -95,7 +137,7 @@ def base_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader
 
 def grid_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
                 test_data: typing.Union[typing.Tuple, DataLoader] = None, max_iter: int = None,
-                cv: int = 1, random_state: int = 42, ):
+                cv: typing.Union[int, typing.List] = 1, random_state: int = 42, ):
     """
     A grid hyperparameters search.
     :param configs: experiment configs. Must contain 'model_init' which is the model init function.
@@ -104,7 +146,8 @@ def grid_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader
     :param train_data:
     :param test_data:
     :param max_iter: number of search iterations
-    :param cv: number of cross-validation fold, default is 1. Any non int value is considered as 1.
+    :param cv: number of cross-validation folds, or a list of folds indices. default is 1.
+     Any non int value is considered as 1.
      When cv > 1, test_data won't be used.
     :param random_state: random seed for cv splits.
     :return: search results pd.DataFrame
@@ -115,7 +158,7 @@ def grid_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader
 
 def random_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
                   test_data: typing.Union[typing.Tuple, DataLoader] = None, max_iter: int = None,
-                  cv: int = 1, random_state: int = 42):
+                  cv: typing.Union[int, typing.List] = 1, random_state: int = 42):
     """
     A random hyperparameters search.
     :param configs: experiment configs. Must contain 'model_init' which is the model init function.
@@ -124,7 +167,8 @@ def random_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoad
     :param train_data:
     :param test_data:
     :param max_iter: number of search iterations
-    :param cv: number of cross-validation fold, default is 1. Any non int value is considered as 1.
+    :param cv: number of cross-validation folds, or a list of folds indices. default is 1.
+     Any non int value is considered as 1.
      When cv > 1, test_data won't be used.
     :param random_state: random seed for cv splits.
     :return: search results pd.DataFrame
@@ -146,7 +190,8 @@ def search_results_to_parameters_results(search_results: pd.DataFrame, metric: s
 def greedy_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
                   test_data: typing.Union[typing.Tuple, DataLoader] = None, max_iter: int = None,
                   max_rounds: int = None, random_start: int = None, beam_size: int = 1, metric: str = None,
-                  cv: int = 1, random_state: int = 42):
+                  top_repetitions: int = None, repeat_n_tops: int = 0,
+                  cv: typing.Union[int, typing.List] = 1, random_state: int = 42):
     """
     A beam-greedy hyperparameters search.
     Each round (round is name of checking all the possible values of all the hyper-parameters),
@@ -172,7 +217,11 @@ def greedy_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoad
     can lead to not missing a good combination.
     :param beam_size: an int. The bigger the `beam_size` is, the less greedy the search is.
     :param metric: a string, see the notes in the function documentation.
-    :param cv: number of cross-validation fold, default is 1. Any non int value is considered as 1.
+    :param top_repetitions: after completing all the iterations as defined by max_iter and max_rounds, repeat the top
+    best search results. This parameters states the number of repetitions for each top result. default None same as 0.
+    :param top_repetitions: an int. the number of top results to repeat.
+    :param cv: number of cross-validation folds, or a list of folds indices. default is 1.
+     Any non int value is considered as 1.
      When cv > 1, test_data won't be used.
     :param random_state: random seed for cv splits.
     :return: search results pd.DataFrame
@@ -231,6 +280,7 @@ def greedy_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoad
                     beam_parameters = {k: [v] for k, v in beam_parameters.items()}
                     beam_parameters[parameter] = parameter_candidate_values
                     beam_configs = configs.copy()
+                    beam_configs['header'] = False
                     beam_configs['init_parameters'] = beam_parameters
                     beam_iters = min(max_iter - current_iter, len(parameter_candidate_values))
                     results = base_search(beam_configs, train_data, test_data, 'grid', beam_iters, cv, random_state)
@@ -244,12 +294,28 @@ def greedy_search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoad
             if current_iter >= max_iter:
                 break
         current_round += 1
-    return pd.concat(search_results, axis=0)
+    # repetitions of the top results - only if top_repetitions and repeat_n_tops are used.
+    if top_repetitions is not None and top_repetitions > 1 and repeat_n_tops > 0:
+        parameters_results = parameters_results.reset_index(drop=True)
+        top_beams = parameters_results.astype({p: str for p in parameters})\
+                                 .sort_values(by=metric, ascending=False).head(top_repetitions)
+        top_beams = parameters_results.loc[top_beams.index, parameters].to_dict('records')
+        for i in range(repeat_n_tops):
+            for beam_parameters in top_beams:
+                beam_parameters = {k: [v] for k, v in beam_parameters.items()}
+                beam_configs = configs.copy()
+                beam_configs['header'] = False
+                beam_configs['init_parameters'] = beam_parameters
+                results = base_search(beam_configs, train_data, test_data, 'grid', repeat_n_tops, cv, random_state)
+                search_results.append(results.copy())
+    search_results = pd.concat(search_results, axis=0)
+    return search_results
 
 
 def search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
            test_data: typing.Union[typing.Tuple, DataLoader] = None, search_type: str = 'random', max_iter: int = None,
-           return_best: bool = True, metric: str = None, cv: int = 1, random_state: int = 42, **kwargs):
+           return_best: typing.Union[bool, int] = True, metric: str = None,
+           cv: typing.Union[int, typing.List] = 1, random_state: int = 42, **kwargs):
     """
      A hyperparameters search. See random_search(), grid_search() and greedy_search() for more details.
     :param configs: a dict of the experiment configs. Must contain 'model_init' which is the model init function.
@@ -259,11 +325,16 @@ def search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
     :param test_data:
     :param search_type: a string. search_type should be one of the following: 'random', 'grid', 'greedy'
     :param max_iter: an int. The number of search iterations
-    :param return_best: a bool. If True returns the best result (according to metric), otherwise returns all results.
+    :param return_best: a bool or an int. If True returns the best result (according to metric),
+     If False, returns all results. If an int return all top n results (n is equal to return_best value).
+     If cv is used, returns the top n results of each cv, including the top global mean n results.
+     Two new columns will be added, rank and cv_fold. Also deletes all the model files and result files of not
+     included in the returned results.
     :param metric: A string. The best combination of hyperparameters is selected according to the `metric` score,
     therefore higher scores of the metric should indicate a better performances. If it is not the case
     (i.e. lower scores are better), you should create a new metric which returns the -1 * score (see metrics.py file).
-    :param cv: number of cross-validation fold, default is 1. Any non int value is considered as 1.
+    :param cv: number of cross-validation folds, or a list of folds indices. default is 1.
+     Any non int value is considered as 1.
      When cv > 1, test_data won't be used.
     :param random_state: random seed for cv splits.
     :param kwargs: see greedy_search() function parameters.
@@ -278,4 +349,4 @@ def search(configs: dict, train_data: typing.Union[typing.Tuple, DataLoader],
                                        random_state=random_state, **kwargs)
     else:
         raise ValueError(f"search_type should be 'random', 'grid' or 'greedy', but got {search_type}")
-    return end_search(search_results, configs, return_best, metric)
+    return end_search(search_results.reset_index(drop=True), configs, return_best, metric)
